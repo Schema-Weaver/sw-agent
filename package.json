@@ -1,12 +1,12 @@
 {
-  "name": "@schema-weaver/agent",
+  "name": "@vivekmind/sw-agent",
   "version": "0.1.0",
   "description": "Bridge between the Schema Weaver browser IDE and your PostgreSQL databases. Runs near the DB, never exposes credentials, executes queries and migrations on demand.",
   "license": "MIT",
   "author": "Schema Weaver",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Schema-Weaver/sw-agent"
+    "url": "git+https://github.com/Schema-Weaver/sw-agent.git"
   },
   "homepage": "https://schemaweaver.vivekmind.com",
   "bugs": {
@@ -31,7 +31,7 @@
   "types": "./dist/types/index.d.ts",
   "sideEffects": false,
   "bin": {
-    "sw-agent": "./dist/cjs/cli/index.js"
+    "sw-agent": "dist/cjs/cli/index.js"
   },
   "exports": {
     ".": {

@@ -1,11 +1,11 @@
-# @schema-weaver/agent
+# @vivekmind/sw-agent
 
 > **Bridge between the Schema Weaver browser IDE and your PostgreSQL databases.**
 > Runs near the DB. Never exposes credentials. Executes queries and migrations on demand.
 
-[![npm version](https://img.shields.io/npm/v/@schema-weaver/agent.svg)](https://www.npmjs.com/package/@schema-weaver/agent)
-[![license](https://img.shields.io/npm/l/@schema-weaver/agent.svg)](./LICENSE)
-[![node version](https://img.shields.io/node/v/@schema-weaver/agent.svg)](https://nodejs.org)
+[![npm version](https://img.shields.io/npm/v/@vivekmind/sw-agent.svg)](https://www.npmjs.com/package/@vivekmind/sw-agent)
+[![license](https://img.shields.io/npm/l/@vivekmind/sw-agent.svg)](./LICENSE)
+[![node version](https://img.shields.io/node/v/@vivekmind/sw-agent.svg)](https://nodejs.org)
 
 ## What is Schema Weaver?
 
@@ -53,16 +53,16 @@ The agent connects **outbound** to the cloud gateway — no inbound firewall cha
 ### As a CLI (run the agent daemon)
 
 ```bash
-npm install -g @schema-weaver/agent
+npm install -g @vivekmind/sw-agent
 
 # Or use without installing:
-npx @schema-weaver/agent init
+npx @vivekmind/sw-agent init
 ```
 
 ### As a library (programmatic API)
 
 ```bash
-npm install @schema-weaver/agent
+npm install @vivekmind/sw-agent
 ```
 
 ## Quick Start (CLI)
@@ -101,7 +101,7 @@ sw-agent status
 ## Quick Start (Programmatic)
 
 ```typescript
-import { AgentClient } from '@schema-weaver/agent';
+import { AgentClient } from '@vivekmind/sw-agent';
 
 const client = new AgentClient({
   relayUrl: 'wss://www.worker-pod.io',
@@ -243,39 +243,39 @@ TEST_PG_URL=postgresql://localhost:5432/test npm run test:e2e
 
 ## API Exports
 
-### `@schema-weaver/agent` (Client SDK)
+### `@vivekmind/sw-agent` (Client SDK)
 
 Browser-safe exports for connecting to agents:
 
 ```typescript
-export { AgentClient } from '@schema-weaver/agent';
-export { AgentClientError, AgentClientTimeoutError, AgentClientDisconnectedError } from '@schema-weaver/agent';
-export { MessageType, ErrorCode } from '@schema-weaver/agent';
+export { AgentClient } from '@vivekmind/sw-agent';
+export { AgentClientError, AgentClientTimeoutError, AgentClientDisconnectedError } from '@vivekmind/sw-agent';
+export { MessageType, ErrorCode } from '@vivekmind/sw-agent';
 ```
 
-### `@schema-weaver/agent` (Server Runtime)
+### `@vivekmind/sw-agent` (Server Runtime)
 
 Full exports including PostgreSQL execution:
 
 ```typescript
 // Config
-export { loadMachineConfig, saveMachineConfig } from '@schema-weaver/agent';
-export { loadDatabaseConfig, saveDatabaseConfig, getDatabase } from '@schema-weaver/agent';
+export { loadMachineConfig, saveMachineConfig } from '@vivekmind/sw-agent';
+export { loadDatabaseConfig, saveDatabaseConfig, getDatabase } from '@vivekmind/sw-agent';
 
 // Protocol
-export { MessageType, ErrorCode, createMessage, serialize, deserialize } from '@schema-weaver/agent';
+export { MessageType, ErrorCode, createMessage, serialize, deserialize } from '@vivekmind/sw-agent';
 
 // Execution
-export { PoolManager, QueryRunner, MigrationRunner, Introspector, Canceller } from '@schema-weaver/agent';
+export { PoolManager, QueryRunner, MigrationRunner, Introspector, Canceller } from '@vivekmind/sw-agent';
 
 // Permissions
-export { PermissionChecker, AutoUpgradeChecker, ManualApprovalHandler, PlanRegistry } from '@schema-weaver/agent';
+export { PermissionChecker, AutoUpgradeChecker, ManualApprovalHandler, PlanRegistry } from '@vivekmind/sw-agent';
 
 // Audit
-export { AuditSink, LocalAuditWriter, CloudAuditWriter, verifyChain } from '@schema-weaver/agent';
+export { AuditSink, LocalAuditWriter, CloudAuditWriter, verifyChain } from '@vivekmind/sw-agent';
 
 // Channels
-export { AgentSession, WakeChannel, DataChannel } from '@schema-weaver/agent';
+export { AgentSession, WakeChannel, DataChannel } from '@vivekmind/sw-agent';
 ```
 
 ## Test Coverage
@@ -287,7 +287,7 @@ export { AgentSession, WakeChannel, DataChannel } from '@schema-weaver/agent';
 ## Related
 
 - [Schema Weaver](https://schemaweaver.vivekmind.com) — Main product
-- [GitHub](https://github.com/Schema-Weaver/sw-agent) — Source code
+- [GitHub](https://github.com/vivekmind/sw-agent) — Source code
 
 ## License
 
