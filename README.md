@@ -77,7 +77,7 @@ sw-agent init
 #  Token shown once — keep it safe to link browser projects.
 
 # 2. Add a PostgreSQL database (interactive, with connection test)
-sw-agent db:add
+sw-agent db add
 #  ? Project name: myapp
 #  ? Database alias: myapp-db
 #  ? Host: localhost
@@ -91,7 +91,7 @@ sw-agent db:add
 #  ✓ Database added successfully!
 
 # 3. List your databases
-sw-agent db:ls
+sw-agent db list
 #  ┌────────┬─────────┬──────────────────┬──────────┬─────────┬────────┬─────┬──────────┐
 #  │ ALIAS  │ PROJECT │ HOST             │ DATABASE │ USER    │ SSL    │ PWD │ PERM     │
 #  ├────────┼─────────┼──────────────────┼──────────┼─────────┼────────┼─────┼──────────┤
@@ -100,7 +100,7 @@ sw-agent db:ls
 #  └────────┴─────────┴──────────────────┴──────────┴─────────┴────────┴─────┴──────────┘
 
 # 4. Test a connection
-sw-agent db:test myapp-db
+sw-agent db test myapp-db
 #  ✓ Connected in 12ms
 #    PostgreSQL 16.3
 #    Database: myapp
@@ -120,18 +120,18 @@ sw-agent doctor
 #  ✓ PID file                     No PID file (agent not running)
 
 # 6. Start the agent daemon
-sw-agent start
+sw-agent agent start
 #  Starting SW Agent
 #    Agent ID: agt_v3_5556c36b
 #    Cloud:    wss://agent.schema-weaver.dev
 #    Databases: 1
 
 # 7. Check status
-sw-agent status
+sw-agent agent status
 #  Agent Status
 #    Running          Yes
 #    PID              12345
-#    Version          0.1.1
+#    Version          0.1.2
 #    Started          2025-01-15 10:23:00
 #    Uptime           2h 34m
 #    Last heartbeat   2025-01-15 12:57:00
@@ -189,21 +189,21 @@ await client.disconnect();
 | Command | Description |
 |---------|-------------|
 | `sw-agent init` | Initialize agent on this machine (generate ID + token) |
-| `sw-agent db:add` | Add a PostgreSQL database (interactive, with connection test) |
-| `sw-agent db:ls` | List configured databases (pretty table) |
-| `sw-agent db:remove <alias>` | Remove a database entry |
-| `sw-agent db:test <alias>` | Test database connection (with latency) |
-| `sw-agent db:edit <alias>` | Edit a database entry (interactive) |
-| `sw-agent ls:projects` | List all configured projects |
-| `sw-agent start` | Start agent daemon (foreground) |
-| `sw-agent start --daemon` | Start as background daemon |
-| `sw-agent stop` | Stop running agent (cleans up PID file) |
-| `sw-agent stop --force` | Force kill (SIGKILL) |
-| `sw-agent status` | Show daemon health and stats |
+| `sw-agent db add` | Add a PostgreSQL database (interactive, with connection test) |
+| `sw-agent db list` | List configured databases (pretty table) |
+| `sw-agent db remove <alias>` | Remove a database entry |
+| `sw-agent db test <alias>` | Test database connection (with latency) |
+| `sw-agent db edit <alias>` | Edit a database entry (interactive) |
+| `sw-agent project list` | List all linked projects |
+| `sw-agent agent start` | Start agent daemon (foreground) |
+| `sw-agent agent start --daemon` | Start as background daemon |
+| `sw-agent agent stop` | Stop running agent (cleans up PID file) |
+| `sw-agent agent stop --force` | Force kill (SIGKILL) |
+| `sw-agent agent status` | Show daemon health and stats |
 | `sw-agent doctor` | Run pre-flight diagnostic checks (includes DB reachability) |
 | `sw-agent logs` | View/filter the audit log |
 | `sw-agent logs --follow` | Follow audit log in real-time |
-| `sw-agent audit:verify` | Verify audit log hash chain integrity |
+| `sw-agent audit verify` | Verify audit log hash chain integrity |
 | `sw-agent link <project>` | Link to a browser project |
 
 ## Permission Model
