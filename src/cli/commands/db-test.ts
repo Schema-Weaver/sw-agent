@@ -1,36 +1,45 @@
-import { findDbEntry } from '../../config/db-config';
+import { findDbEntry, dbConfigExists, loadDbConfig } from '../../config/db-config';
 import { Pool, PoolConfig } from 'pg';
 import * as fs from 'fs';
+import { isReplMode } from '../prompt';
+import { C, S, createSpinner, renderTable } from '../ui';
 
-/**
- * Tests connection to a database configuration.
- */
-export async function runDbTest(args: string[]): Promise<void> {
-  const alias = args[0];
-  if (!alias) {
-    console.log('Usage: sw-agent db:test <alias>');
-    process.exit(1);
+function exit_(code: number): never {
+  if (isReplMode()) {
+    throw { __exitCode: code };
   }
+  process.exit(code);
+}
 
-  const entry = findDbEntry(alias);
+interface TestResult {
+  alias: string;
+  host: string;
+  ok: boolean;
+  latency: number;
+  version: string;
+  error: string;
+}
+
+async function testOne(
+  entry: ReturnType<typeof findDbEntry> | null,
+): Promise<TestResult> {
   if (!entry) {
-    console.error(`Error: Database alias "${alias}" not found.`);
-    process.exit(1);
+    return { alias: '-', host: '-', ok: false, latency: 0, version: '', error: 'not found' };
   }
 
-  console.log(`Testing ${alias} (${entry.host}:${entry.port}/${entry.database})...`);
-
-  const passwordEnv = entry.password_env;
-  const password = process.env[passwordEnv];
+  const password =
+    entry.password_stored ||
+    (entry.password_env ? process.env[entry.password_env] : undefined);
 
   if (!password) {
-    console.error(`\n✗ Connection failed: Environment variable "${passwordEnv}" is not set.\n`);
-    console.log('Troubleshooting:');
-    console.log(`- Check that the password env var ${passwordEnv} is set`);
-    console.log('- Check that the host is reachable from this machine');
-    console.log('- Check that the PG user has login permission');
-    console.log('- Check SSL configuration');
-    process.exit(1);
+    return {
+      alias: entry.db_alias,
+      host: `${entry.host}:${entry.port}`,
+      ok: false,
+      latency: 0,
+      version: '',
+      error: 'password not set',
+    };
   }
 
   const poolConfig: PoolConfig = {
@@ -44,7 +53,8 @@ export async function runDbTest(args: string[]): Promise<void> {
 
   if (entry.ssl_mode !== 'disable') {
     poolConfig.ssl = {
-      rejectUnauthorized: entry.ssl_mode === 'verify-ca' || entry.ssl_mode === 'verify-full',
+      rejectUnauthorized:
+        entry.ssl_mode === 'verify-ca' || entry.ssl_mode === 'verify-full',
     };
     if (entry.ssl_root_cert) {
       poolConfig.ssl.ca = fs.readFileSync(entry.ssl_root_cert, 'utf8');
@@ -58,30 +68,135 @@ export async function runDbTest(args: string[]): Promise<void> {
     const result = await Promise.race([
       pool.query('SELECT version(), current_database(), current_user;'),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Connection timed out (5s)')), 5000),
+        setTimeout(() => reject(new Error('timed out (5s)')), 5000),
       ),
     ]);
     const latency = Date.now() - startTime;
-    const versionStr = result.rows[0]?.version || 'unknown version';
-    const dbName = result.rows[0]?.current_database || entry.database;
-    const dbUser = result.rows[0]?.current_user || entry.user;
+    const raw = result.rows[0]?.version || 'unknown';
+    const match = raw.match(/PostgreSQL [^\s,]+/);
+    const versionStr = match ? match[0] : 'PostgreSQL';
 
-    console.log('\n✓ Connected');
-    console.log(`  ${versionStr}`);
-    console.log(`  Database: ${dbName}`);
-    console.log(`  User: ${dbUser}`);
-    console.log(`  Latency: ${latency}ms`);
-    process.exit(0);
+    return {
+      alias: entry.db_alias,
+      host: `${entry.host}:${entry.port}`,
+      ok: true,
+      latency,
+      version: versionStr,
+      error: '',
+    };
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    console.error(`\n✗ Connection failed: ${errMsg}\n`);
-    console.log('Troubleshooting:');
-    console.log(`- Check that the password env var ${passwordEnv} is set`);
-    console.log('- Check that the host is reachable from this machine');
-    console.log('- Check that the PG user has login permission');
-    console.log('- Check SSL configuration');
-    process.exit(1);
+    return {
+      alias: entry.db_alias,
+      host: `${entry.host}:${entry.port}`,
+      ok: false,
+      latency: Date.now() - startTime,
+      version: '',
+      error: err instanceof Error ? err.message : String(err),
+    };
   } finally {
     await pool.end();
   }
+}
+
+export async function runDbTest(args: string[]): Promise<void> {
+  const testAll = args.includes('--all');
+
+  if (testAll) {
+    // Test every configured database concurrently.
+    if (!dbConfigExists()) {
+      console.log(`  ${C.yellow(S.warning)} No databases configured. Run ${C.cyan('db add')} first.`);
+      exit_(0);
+    }
+
+    const config = loadDbConfig();
+    if (config.length === 0) {
+      console.log(`  ${C.yellow(S.warning)} No databases configured.`);
+      exit_(0);
+    }
+
+    console.log();
+    console.log(C.bold('  Testing all databases'));
+    console.log();
+
+    const spinner = createSpinner();
+    spinner.start(`Testing ${C.white(String(config.length))} databases…`);
+
+    const results = await Promise.all(config.map((db) => testOne(db)));
+
+    spinner.stop();
+    console.log();
+
+    const rows = results.map((r) => ({
+      alias: r.ok ? C.green(r.alias) : C.red(r.alias),
+      host: C.dim(r.host),
+      status: r.ok
+        ? C.green(`${C.green(S.check)} ${r.latency}ms`)
+        : C.red(`${S.cross} ${truncate(r.error, 30)}`),
+      version: r.ok ? C.white(r.version) : C.dim('-'),
+    }));
+
+    console.log(
+      renderTable(rows, {
+        columns: [
+          { key: 'alias', header: 'ALIAS', minWidth: 10, maxWidth: 18, priority: 0 },
+          { key: 'host', header: 'HOST', minWidth: 14, maxWidth: 30, priority: 2 },
+          { key: 'status', header: 'STATUS', minWidth: 12, maxWidth: 28, priority: 1 },
+          { key: 'version', header: 'VERSION', minWidth: 12, maxWidth: 20, priority: 4 },
+        ],
+      }),
+    );
+
+    console.log();
+    const ok = results.filter((r) => r.ok).length;
+    console.log(
+      `  ${ok === config.length
+        ? C.green(`${S.check} All ${ok} databases connected successfully.`)
+        : C.yellow(`${S.warning} ${ok}/${config.length} databases connected.`)
+      }`,
+    );
+    console.log();
+    exit_(ok === config.length ? 0 : 1);
+  }
+
+  // Single alias test.
+  const alias = args[0];
+  if (!alias) {
+    console.log(`  ${C.yellow('Usage:')} ${C.white('db test <alias>')} ${C.dim('or')} ${C.white('db test --all')}`);
+    exit_(1);
+  }
+
+  const entry = findDbEntry(alias);
+  if (!entry) {
+    console.log(`  ${C.red(S.cross)} Database alias "${C.white(alias)}" not found.`);
+    console.log(
+      `  ${C.dim('Run')} ${C.cyan('db list')} ${C.dim('to see available databases.')}`,
+    );
+    exit_(1);
+  }
+
+  console.log();
+  console.log(
+    `  ${C.bold('Testing')} ${C.white(alias)} ${C.dim(`(${entry.host}:${entry.port}/${entry.database})`)}`,
+  );
+  console.log();
+
+  const spinner = createSpinner();
+  spinner.start('Connecting…');
+
+  const result = await testOne(entry);
+
+  if (result.ok) {
+    spinner.succeed(`Connected in ${C.green(`${result.latency}ms`)}`);
+    console.log();
+    console.log(`  ${C.green(S.check)} ${C.white(result.version)}`);
+    console.log();
+  } else {
+    if (spinner) spinner.fail(`Connection failed: ${C.red(result.error)}`);
+    console.log();
+    exit_(1);
+  }
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }

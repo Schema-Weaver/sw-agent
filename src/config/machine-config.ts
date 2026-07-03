@@ -24,12 +24,17 @@ export interface MachineConfig {
   default_permission: PermissionLevel;
   machine_label: string; // human-readable, e.g. "vivek-laptop"
   log_level: 'debug' | 'info' | 'warn' | 'error';
+  /** Cloud telemetry: ship audit + operation logs to the backend (best-effort). */
+  cloud_telemetry?: {
+    enabled: boolean;
+    ingest_url?: string; // optional override; otherwise derived from cloud_url
+  };
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601
 }
 
 export const DEFAULT_MACHINE_CONFIG: Partial<MachineConfig> = {
-  cloud_url: 'wss://agent.schema-weaver.dev',
+  cloud_url: 'wss://api-node.schemaweaver.vivekmind.com',
   default_permission: 'auto_upgrade',
   machine_label: 'unknown',
   log_level: 'info',
@@ -44,7 +49,7 @@ export function createDefaultMachineConfig(opts: {
   permission?: PermissionLevel;
   token?: string;
 }): MachineConfig {
-  const cloudUrl = opts.cloudUrl || 'wss://agent.schema-weaver.dev';
+  const cloudUrl = opts.cloudUrl || 'wss://api-node.schemaweaver.vivekmind.com';
   const permission = opts.permission || 'auto_upgrade';
   const token = opts.token || generateAgentToken();
   const agentId = generateAgentId(opts.machineLabel);
@@ -123,6 +128,23 @@ export function validateMachineConfig(raw: unknown): MachineConfig {
     throw new ConfigInvalidError('Field "log_level" invalid: Must be debug, info, warn, or error');
   }
 
+  // Optional cloud telemetry config.
+  const telemetry = data.cloud_telemetry;
+  if (telemetry !== undefined && telemetry !== null) {
+    if (typeof telemetry !== 'object') {
+      throw new ConfigInvalidError('Field "cloud_telemetry" invalid: Must be an object');
+    }
+    const t = telemetry as Record<string, unknown>;
+    if (typeof t.enabled !== 'boolean') {
+      throw new ConfigInvalidError('Field "cloud_telemetry.enabled" invalid: Must be boolean');
+    }
+    if (t.ingest_url !== undefined && t.ingest_url !== null) {
+      if (typeof t.ingest_url !== 'string' || (!t.ingest_url.startsWith('http://') && !t.ingest_url.startsWith('https://'))) {
+        throw new ConfigInvalidError('Field "cloud_telemetry.ingest_url" invalid: Must start with http:// or https://');
+      }
+    }
+  }
+
   const created = data.created_at;
   if (typeof created !== 'string' || !isValidIso8601(created)) {
     throw new ConfigInvalidError('Field "created_at" invalid: Must be a valid ISO 8601 string');
@@ -167,7 +189,7 @@ export function loadMachineConfig(): MachineConfig {
 
   let json: unknown;
   try {
-    json = JSON.parse(fileContent);
+    json = JSON.parse(stripBom(fileContent));
   } catch (err) {
     throw new ConfigInvalidError(
       `Config file is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
@@ -175,6 +197,10 @@ export function loadMachineConfig(): MachineConfig {
   }
 
   return validateMachineConfig(json);
+}
+
+function stripBom(content: string): string {
+  return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
 }
 
 /**

@@ -1,126 +1,154 @@
 import * as os from 'os';
-import { ask, askConfirm, askChoice, closePrompts } from '../prompt';
+import { ask, askChoice, askConfirm, isReplMode } from '../prompt';
 import {
   createDefaultMachineConfig,
   saveMachineConfig,
   machineConfigExists,
-  MachineConfig,
-  PermissionLevel,
 } from '../../config/machine-config';
-import { getMachineConfigPath } from '../../config/paths';
+import { getMachineConfigPath, getSwAgentDir } from '../../config/paths';
 import { generateAgentToken } from '../../config/token';
+import { C, S, separator, check, arrow, box } from '../ui';
+import { copyToClipboard } from '../ui/clipboard';
 
-function padLine(label: string, value: string, width = 46): string {
-  const prefix = `│ ${label}:`;
-  const content = `${prefix} ${value}`;
-  const paddingSize = width - content.length - 2;
-  const padding = paddingSize > 0 ? ' '.repeat(paddingSize) : '';
-  return `${content}${padding} │`;
+function exit_(code: number): never {
+  if (isReplMode()) {
+    throw { __exitCode: code };
+  }
+  process.exit(code);
 }
 
-function padPathLine(text: string, width = 46): string {
-  const prefix = `│ ${text}`;
-  const paddingSize = width - prefix.length - 2;
-  const padding = paddingSize > 0 ? ' '.repeat(paddingSize) : '';
-  return `${prefix}${padding} │`;
-}
-
-/**
- * Initializes first-time machine config setup.
- */
 export async function runInit(_args: string[]): Promise<void> {
   if (machineConfigExists()) {
-    const overwrite = await askConfirm('Machine config already exists. Overwrite?', false);
+    const overwrite = await askConfirm(
+      C.yellow('Config already exists. Overwrite?'),
+      false,
+    );
     if (!overwrite) {
-      console.log('Aborted. No changes made.');
-      closePrompts();
-      process.exit(0);
+      console.log(`  ${C.yellow(S.warning)} Aborted.`);
+      exit_(0);
     }
   }
 
-  const defaultLabel = os
-    .hostname()
-    .toLowerCase()
-    .replace(/[^a-zA-Z0-9_-]/g, '');
+  console.log();
+  console.log(C.bold(C.brand('  Schema Weaver Agent — First Time Setup')));
+  console.log(separator('', 50));
+  console.log();
+
+  // Step 1: Machine label
+  const defaultLabel = os.hostname().toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '');
   let machineLabel = '';
   for (;;) {
     machineLabel = await ask('Machine label', defaultLabel);
     if (
+      machineLabel.trim() !== '' &&
       /^[a-zA-Z0-9_-]+$/.test(machineLabel) &&
-      machineLabel.length >= 1 &&
       machineLabel.length <= 64
     ) {
       break;
     }
     console.log(
-      'Project name/machine label can only contain letters, numbers, hyphens, and underscores.',
+      `  ${C.red(S.cross)} Use letters, numbers, hyphens, underscores only (max 64 chars).`,
     );
   }
+  console.log(`  ${check(`Machine label: ${C.white(machineLabel)}`)}`);
+  console.log();
 
+  // Step 2: Cloud URL
   let cloudUrl = '';
   for (;;) {
-    cloudUrl = await ask('Cloud URL', 'wss://agent.schema-weaver.dev');
-    if ((cloudUrl.startsWith('wss://') || cloudUrl.startsWith('ws://')) && cloudUrl.length >= 10) {
+    cloudUrl = await ask('Cloud URL', 'wss://api-node.schemaweaver.vivekmind.com');
+    if (
+      cloudUrl.trim() !== '' &&
+      (cloudUrl.startsWith('wss://') || cloudUrl.startsWith('ws://'))
+    ) {
       break;
     }
-    console.log('Cloud URL must start with wss:// or ws:// and be at least 10 characters.');
+    console.log(`  ${C.red(S.cross)} URL must start with wss:// or ws://`);
   }
+  console.log(`  ${check(`Cloud URL: ${C.white(cloudUrl)}`)}`);
+  console.log();
 
-  console.log('\nDefault Permission Levels:');
-  console.log('  - read_only: Only select queries are allowed.');
-  console.log('  - auto_upgrade: Automatically executes select and approved schema migrations.');
-  console.log('  - manual: Prompts for browser approval on every non-read query.');
-  console.log('  - full: Allows any queries/migrations without checks.');
+  // Step 3: Agent permission
+  const permOptions = ['read_only', 'auto_upgrade', 'manual', 'full'];
+  const permAnswer = await askChoice('Permission level', permOptions, 'auto_upgrade');
+  console.log(`  ${check(`Permission: ${C.yellow(permAnswer)}`)}`);
+  console.log();
 
-  const defaultPermission = (await askChoice(
-    'default permission',
-    ['read_only', 'auto_upgrade', 'manual', 'full'],
-    'auto_upgrade',
-  )) as PermissionLevel;
+  // Step 4: Log level
+  const logOptions = ['debug', 'info', 'warn', 'error'];
+  const logLevel = await askChoice('Log level', logOptions, 'info');
+  console.log(`  ${check(`Log level: ${C.white(logLevel)}`)}`);
+  console.log();
 
-  const logLevel = (await askChoice(
-    'log level',
-    ['debug', 'info', 'warn', 'error'],
-    'info',
-  )) as MachineConfig['log_level'];
-
+  // Step 5: Generate token locally (no cloud interaction needed)
   const token = generateAgentToken();
+
   const config = createDefaultMachineConfig({
     machineLabel,
     cloudUrl,
-    permission: defaultPermission,
+    permission: permAnswer as any,
     token,
   });
-  config.log_level = logLevel;
 
-  const pathStr = getMachineConfigPath();
+  config.log_level = logLevel as any;
 
-  console.log('\n┌─ SW Agent Configuration ──────────────────────┐');
-  console.log(padLine('Machine label', config.machine_label));
-  console.log(padLine('Cloud URL', config.cloud_url));
-  console.log(padLine('Agent ID', config.agent_id));
-  console.log(padLine('Agent token', config.agent_token));
-  console.log(padLine('Permission', config.default_permission));
-  console.log(padLine('Log level', config.log_level));
-  console.log('│                                                │');
-  console.log(padPathLine(`Config path: ${pathStr}`));
-  console.log('└────────────────────────────────────────────────┘');
+  // Summary — Agent ID and Token each in their own highlighted box.
+  console.log(separator('Summary', 50));
+  console.log();
 
-  console.log("\n⚠️  SAVE YOUR TOKEN. You'll need it to link this agent to a browser project.");
-  console.log('    The token is stored in the config file but is shown here only once');
-  console.log('    in this summary.\n');
+  console.log(
+    box(`  ${C.bold('Agent ID')}\n\n  ${C.cyan(config.agent_id)}`, {
+      style: 'single',
+      borderColor: C.brand,
+      width: 54,
+    }),
+  );
+  console.log();
 
-  const save = await askConfirm('Save?', true);
-  if (save) {
-    saveMachineConfig(config);
-    console.log('✓ Config saved.');
-    console.log('\nNext steps:');
-    console.log('1. Add a database: sw-agent db:add');
-    console.log('2. (Part 4) Start the agent: sw-agent start');
+  console.log(
+    box(`  ${C.bold('Token')}  ${C.dim('(use this to link the IDE)')}\n\n  ${C.white(token)}`, {
+      style: 'single',
+      borderColor: C.brand,
+      width: 54,
+    }),
+  );
+  console.log();
+
+  // Attempt clipboard copy of the token.
+  const clip = copyToClipboard(token);
+  if (clip.copied) {
+    console.log(
+      `  ${C.green(S.check)} ${C.brightGreen('Token copied to clipboard')} ${C.dim(`(via ${clip.method})`)}`,
+    );
   } else {
-    console.log('Aborted. Config not saved.');
+    console.log(`  ${C.dim('Tip:')} ${C.white('Select and copy the token above manually.')}`);
   }
 
-  closePrompts();
-  process.exit(0);
+  console.log();
+  console.log(`  ${C.yellow(S.warning)} ${C.brightYellow('Token shown once. Keep it safe to link browser projects.')}`);
+  console.log();
+
+  console.log(`  ${C.bold('Paths:')}`);
+  console.log(`    Config: ${C.dim(getMachineConfigPath())}`);
+  console.log(`    Home:   ${C.dim(getSwAgentDir())}`);
+  console.log();
+
+  const save = await askConfirm(C.brand('Save configuration?'), true);
+  if (save) {
+    saveMachineConfig(config);
+    console.log();
+    console.log(`  ${C.green(S.check)} ${C.brightGreen('Configuration saved successfully!')}`);
+    console.log();
+    console.log(C.bold('  Next steps:'));
+    console.log(arrow('db add      — Add a database', C.cyan));
+    console.log(arrow('agent start — Start the agent', C.cyan));
+    console.log(arrow('agent status— Check agent status', C.cyan));
+    console.log();
+  } else {
+    console.log();
+    console.log(`  ${C.yellow(S.warning)} Setup aborted. No changes were made.`);
+    console.log();
+  }
+
+  exit_(0);
 }

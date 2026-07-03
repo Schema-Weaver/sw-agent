@@ -24,7 +24,8 @@ export interface DbEntry {
   port: number; // 1-65535
   database: string;
   user: string;
-  password_env: string; // OS env var name (NOT the password)
+  password_env?: string; // OS env var name (optional)
+  password_stored?: string; // Password stored directly (optional)
   ssl_mode: 'disable' | 'require' | 'verify-ca' | 'verify-full';
   ssl_root_cert?: string | null; // path to CA cert, optional
   permission_override: PermissionLevel | null;
@@ -119,9 +120,24 @@ export function validateDbConfig(raw: unknown): DbConfig {
     }
 
     const pwEnv = data.password_env;
-    if (typeof pwEnv !== 'string' || !isValidEnvVarName(pwEnv)) {
+    const pwStored = data.password_stored;
+    if (pwEnv !== undefined && pwEnv !== null) {
+      if (typeof pwEnv !== 'string' || !isValidEnvVarName(pwEnv)) {
+        throw new ConfigInvalidError(
+          `Entry at index ${i} invalid: password_env must be uppercase letters, digits, and underscores, starting with a letter.`,
+        );
+      }
+    }
+    if (pwStored !== undefined && pwStored !== null) {
+      if (typeof pwStored !== 'string') {
+        throw new ConfigInvalidError(
+          `Entry at index ${i} invalid: password_stored must be a string.`,
+        );
+      }
+    }
+    if (!pwEnv && !pwStored) {
       throw new ConfigInvalidError(
-        `Entry at index ${i} invalid: Env var name must be uppercase letters, digits, and underscores, starting with a letter.`,
+        `Entry at index ${i} invalid: Either password_env or password_stored is required.`,
       );
     }
 
@@ -186,7 +202,7 @@ export function loadDbConfig(): DbConfig {
 
   let json: unknown;
   try {
-    json = JSON.parse(fileContent);
+    json = JSON.parse(stripBom(fileContent));
   } catch (err) {
     throw new ConfigInvalidError(
       `Config file is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
@@ -194,6 +210,10 @@ export function loadDbConfig(): DbConfig {
   }
 
   return validateDbConfig(json);
+}
+
+function stripBom(content: string): string {
+  return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
 }
 
 /**

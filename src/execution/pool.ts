@@ -43,11 +43,14 @@ export class PoolManager {
 
     let poolRecord = this.pools.get(dbAlias);
     if (!poolRecord) {
-      const passwordFromEnv = process.env[dbEntry.password_env];
-      if (!passwordFromEnv) {
+      const password = dbEntry.password_stored || (dbEntry.password_env ? process.env[dbEntry.password_env] : undefined);
+      if (!password) {
+        const envHint = dbEntry.password_env 
+          ? `Environment variable "${dbEntry.password_env}" is missing or empty.`
+          : 'No password configured.';
         throw new PoolError(
           'env_var_missing',
-          `Environment variable for database password "${dbEntry.password_env}" is missing or empty.`
+          `Password not found. ${envHint}`
         );
       }
 
@@ -67,7 +70,7 @@ export class PoolManager {
         port: dbEntry.port,
         database: dbEntry.database,
         user: dbEntry.user,
-        password: passwordFromEnv,
+        password: password,
         ssl: sslConfig,
         max: this.opts.maxPoolSize ?? 5,
         idleTimeoutMillis: 30_000,
@@ -108,7 +111,7 @@ export class PoolManager {
         message = `Cannot reach PostgreSQL at ${dbEntry.host}:${dbEntry.port}. Check that the DB is running and the agent has network access.`;
       } else if (code === '28P01') {
         errorType = 'auth_failed';
-        message = `PostgreSQL rejected credentials. Verify the password env var "${dbEntry.password_env}" is set correctly.`;
+        message = `PostgreSQL rejected credentials. Check password for user "${dbEntry.user}".`;
       } else if (code === '28000') {
         errorType = 'auth_failed';
         message = `PG user "${dbEntry.user}" does not have login permission.`;

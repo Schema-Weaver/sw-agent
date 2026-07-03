@@ -1,167 +1,130 @@
-import * as path from 'path';
-import { getSwAgentDir } from '../../config/paths';
-import { readPidFile, isProcessAlive } from '../daemon/pid-file';
-import { readStatusFile, isStatusStale } from '../daemon/status-file';
-import { DaemonStatus } from '../daemon/status-file';
+import { resolveAgentRuntimeState, formatDuration, formatTimestamp } from '../daemon/state';
+import { isReplMode } from '../prompt';
+import { C, S, check, warn, truncateAnsi, terminalWidth } from '../ui';
 
-interface DisplayStatus {
-  agent: {
-    running: boolean;
-    pid: number | null;
-    version: string | null;
-    started_at: string | null;
-    uptime_sec: number | null;
-    last_heartbeat: string | null;
-    status_ok: boolean;
-  };
-  channels: DaemonStatus['channels'] | null;
-  stats: DaemonStatus['stats'] | null;
-  last_error: DaemonStatus['last_error'] | null;
+function exit_(code: number): never {
+  if (isReplMode()) {
+    throw { __exitCode: code };
+  }
+  process.exit(code);
 }
 
-export async function runStatus(_args: string[]): Promise<void> {
-  const swAgentDir = getSwAgentDir();
-  const pidFile = path.join(swAgentDir, 'sw-agent.pid');
-  const statusFile = path.join(swAgentDir, 'sw-agent.status');
-  
-  const pidInfo = await readPidFile({ path: pidFile });
-  const statusInfo = await readStatusFile({ path: statusFile });
-  
-  let running = false;
-  let pid: number | null = null;
-  let version: string | null = null;
-  let startedAt: string | null = null;
-  let uptimeSec: number | null = null;
-  let lastHeartbeat: string | null = null;
-  let statusOk = true;
-  
-  const now = new Date();
-  
-  if (pidInfo) {
-    pid = pidInfo.pid;
-    version = pidInfo.version;
-    startedAt = pidInfo.started_at;
-    running = isProcessAlive(pid);
-    
-    if (startedAt) {
-      const startTime = new Date(startedAt);
-      uptimeSec = Math.floor((now.getTime() - startTime.getTime()) / 1000);
-    }
+export async function runStatus(args: string[]): Promise<void> {
+  const json = args.includes('--json') || args.includes('-j');
+  const state = resolveAgentRuntimeState();
+
+  if (json) {
+    console.log(JSON.stringify({
+      running: state.running,
+      healthy: state.healthy,
+      state: state.kind,
+      pid: state.pid,
+      version: state.version,
+      started_at: state.started_at,
+      uptime_sec: state.uptime_sec,
+      last_heartbeat: state.last_heartbeat,
+      channels: state.status?.channels ?? null,
+      stats: state.status?.stats ?? null,
+      config: state.status?.config ?? null,
+      last_error: state.status?.last_error ?? null,
+    }, null, 2));
+    exit_(state.running && state.healthy ? 0 : 1);
   }
-  
-  if (statusInfo && running && pid === statusInfo.pid) {
-    lastHeartbeat = statusInfo.last_heartbeat;
-    if (isStatusStale(statusInfo)) {
-      statusOk = false;
-    }
-    
-    const lines = formatStatusOutput({
-      agent: {
-        running,
-        pid,
-        version,
-        started_at: startedAt,
-        uptime_sec: uptimeSec,
-        last_heartbeat: lastHeartbeat,
-        status_ok: statusOk,
-      },
-      channels: statusInfo.channels,
-      stats: statusInfo.stats,
-      last_error: statusInfo.last_error,
-    });
-    
-    console.log(lines);
-  } else {
-    const lines = formatStatusOutput({
-      agent: {
-        running,
-        pid,
-        version,
-        started_at: startedAt,
-        uptime_sec: uptimeSec,
-        last_heartbeat: lastHeartbeat,
-        status_ok: statusOk,
-      },
-      channels: null,
-      stats: null,
-      last_error: null,
-    });
-    
-    console.log(lines);
-  }
-  
-  const exitCode = running && statusOk ? 0 : 1;
-  process.exit(exitCode);
+
+  console.log();
+  console.log(formatStatusOutput(state));
+  console.log();
+  exit_(state.running && state.healthy ? 0 : 1);
 }
 
-function formatStatusOutput(status: DisplayStatus): string {
+function formatStatusOutput(state: ReturnType<typeof resolveAgentRuntimeState>): string {
   const lines: string[] = [];
-  
-  lines.push('┌─ Agent Status ─────────────────────────────────┐');
-  lines.push(padLine('Running', status.agent.running ? 'Yes' : 'No'));
-  lines.push(padLine('PID', status.agent.pid !== null ? String(status.agent.pid) : '-'));
-  lines.push(padLine('Version', status.agent.version || '-'));
-  lines.push(padLine('Started', status.agent.started_at ? formatTimestamp(status.agent.started_at) : '-'));
-  lines.push(padLine('Uptime', status.agent.uptime_sec !== null ? formatDuration(status.agent.uptime_sec) : '-'));
-  lines.push(padLine('Last heartbeat', status.agent.last_heartbeat ? formatTimestamp(status.agent.last_heartbeat) : '-'));
-  if (status.agent.running) {
-    lines.push(padLine('Status', status.agent.status_ok ? 'OK' : 'STALE (heartbeat > 90s ago)'));
+  const width = terminalWidth();
+  const valueWidth = Math.max(16, width - 28);
+
+  lines.push(C.brand(C.bold('  Agent Status')));
+  lines.push('');
+
+  const statusText = state.kind === 'running'
+    ? check('Running')
+    : state.kind === 'starting'
+      ? warn('Starting')
+      : state.kind === 'unresponsive'
+        ? warn('Unresponsive')
+        : C.dim(`${S.dot} Stopped`);
+
+  const rows = [
+    ['State', statusText],
+    ['PID', state.pid !== null ? C.white(String(state.pid)) : C.dim('-')],
+    ['Version', state.version ? C.white(state.version) : C.dim('-')],
+    ['Started', state.started_at ? C.white(formatTimestamp(state.started_at)) : C.dim('-')],
+    ['Uptime', state.uptime_sec !== null ? C.white(formatDuration(state.uptime_sec)) : C.dim('-')],
+    ['Heartbeat', state.last_heartbeat ? C.white(formatTimestamp(state.last_heartbeat)) : C.dim('-')],
+  ];
+
+  if (state.status_mismatch) {
+    rows.push(['Status file', C.yellow('PID mismatch, ignoring stale status')]);
+  } else if (state.running && !state.status) {
+    rows.push(['Status file', C.yellow('Waiting for first heartbeat')]);
   }
-  
-  if (status.channels) {
-    lines.push('├─ Channels ─────────────────────────────────────┤');
-    lines.push(padLine('SSE', status.channels.sse));
-    lines.push(padLine('WSS', status.channels.wss));
+
+  for (const [label, value] of rows) {
+    lines.push(kv(label, value, valueWidth));
   }
-  
-  if (status.stats) {
-    lines.push('├─ Stats ────────────────────────────────────────┤');
-    lines.push(padLine('Queries served', String(status.stats.queries_served)));
-    lines.push(padLine('Streams served', String(status.stats.streams_served)));
-    lines.push(padLine('Migrations run', String(status.stats.migrations_run)));
-    lines.push(padLine('Cancellations', String(status.stats.cancellations)));
-    lines.push(padLine('Permission denies', String(status.stats.permission_denies)));
-    lines.push(padLine('Audit events', String(status.stats.audit_events_written)));
-    lines.push(padLine('Buffer overflows', String(status.stats.audit_buffer_overflows)));
+
+  if (state.status?.channels) {
+    lines.push('');
+    lines.push(C.bold('  Channels'));
+    lines.push('');
+    lines.push(kv('SSE', channelState(state.status.channels.sse), valueWidth));
+    lines.push(kv('WSS', channelState(state.status.channels.wss), valueWidth));
+    if (state.status.channels.last_sse_reconnect) {
+      lines.push(kv('Last reconnect', C.dim(state.status.channels.last_sse_reconnect), valueWidth));
+    }
   }
-  
-  if (status.last_error) {
-    lines.push('├─ Last Error ───────────────────────────────────┤');
-    lines.push(padLine('Time', formatTimestamp(status.last_error.ts)));
-    lines.push(padLine('Code', status.last_error.code));
-    lines.push(padLine('Message', truncate(status.last_error.message, 30)));
+
+  if (state.status?.config) {
+    lines.push('');
+    lines.push(C.bold('  Configuration'));
+    lines.push('');
+    lines.push(kv('Databases', C.white(String(state.status.config.databases)), valueWidth));
+    lines.push(kv('Projects', C.white(String(state.status.config.projects)), valueWidth));
+    lines.push(kv('Revision', C.dim(String(state.status.config.revision)), valueWidth));
   }
-  
-  lines.push('└────────────────────────────────────────────────┘');
-  
+
+  if (state.status?.stats) {
+    lines.push('');
+    lines.push(C.bold('  Activity'));
+    lines.push('');
+    const stats = state.status.stats;
+    lines.push(kv('Queries', C.white(String(stats.queries_served)), valueWidth));
+    lines.push(kv('Streams', C.white(String(stats.streams_served)), valueWidth));
+    lines.push(kv('Migrations', C.white(String(stats.migrations_run)), valueWidth));
+    lines.push(kv('Cancellations', C.white(String(stats.cancellations)), valueWidth));
+    lines.push(kv('Denied', C.yellow(String(stats.permission_denies)), valueWidth));
+    lines.push(kv('Audit events', C.white(String(stats.audit_events_written)), valueWidth));
+  }
+
+  if (state.status?.last_error) {
+    lines.push('');
+    lines.push(C.bold(C.red('  Last Error')));
+    lines.push('');
+    lines.push(kv('Time', C.white(formatTimestamp(state.status.last_error.ts)), valueWidth));
+    lines.push(kv('Code', C.yellow(state.status.last_error.code), valueWidth));
+    lines.push(kv('Message', C.white(truncateAnsi(state.status.last_error.message, valueWidth)), valueWidth));
+  }
+
   return lines.join('\n');
 }
 
-function padLine(label: string, value: string, width = 46): string {
-  const prefix = `│ ${label}:`;
-  const content = `${prefix} ${value}`;
-  const paddingSize = width - content.length - 2;
-  const padding = paddingSize > 0 ? ' '.repeat(paddingSize) : '';
-  return `${content}${padding} │`;
+function kv(label: string, value: string, valueWidth: number): string {
+  return `    ${C.bold(label.padEnd(14))} ${truncateAnsi(value, valueWidth)}`;
 }
 
-function formatTimestamp(ts: string): string {
-  return ts.replace('T', ' ').slice(0, 19);
-}
-
-function formatDuration(sec: number): string {
-  const hours = Math.floor(sec / 3600);
-  const mins = Math.floor((sec % 3600) / 60);
-  const secs = Math.floor(sec % 60);
-  if (hours > 0) {
-    return `${hours}h ${mins}m ${secs}s`;
-  }
-  if (mins > 0) {
-    return `${mins}m ${secs}s`;
-  }
-  return `${secs}s`;
-}
-
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+function channelState(state: string): string {
+  if (state === 'connected') return C.green('connected');
+  if (state === 'connecting') return C.yellow('connecting');
+  if (state === 'idle') return C.dim('idle');
+  if (state === 'disconnected') return C.dim('disconnected');
+  return C.red(state);
 }

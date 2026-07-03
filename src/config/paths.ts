@@ -47,3 +47,17 @@ export function getAuditLogPath(): string {
 export function getPidFilePath(): string {
   return path.join(getAgentHome(), 'sw-agent.pid');
 }
+
+/**
+ * Returns the path to the daemon status file sw-agent.status.
+ */
+export function getStatusFilePath(): string {
+  return path.join(getAgentHome(), 'sw-agent.status');
+}
+
+/**
+ * Returns the path to the daemon diagnostic log file daemon.log.
+ */
+export function getDaemonLogPath(): string {
+  return path.join(getAgentHome(), 'daemon.log');
+}

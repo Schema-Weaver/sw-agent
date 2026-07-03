@@ -1,4 +1,4 @@
-export const VERSION = '0.1.0';
+export const VERSION = '0.1.2';
 
 // Config (from Part 2)
 export * from './config/machine-config';
@@ -13,7 +13,7 @@ export {
   AgentMessage,
   Role,
   MessageType,
-  EventKind,
+  EventKind, 
   MigrationStatementStatus,
   createMessage,
 } from './protocol/envelope';

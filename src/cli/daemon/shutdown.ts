@@ -36,7 +36,7 @@ class ShutdownCoordinatorImpl implements ShutdownCoordinator {
 
       for (const [name, cleanup] of entries) {
         const remaining = Math.max(0, timeoutMs - (Date.now() - startTime));
-        console.error(`[coordinator] ${new Date().toISOString()} starting cleanup of resource: ${name}`);
+        debugLog(`[coordinator] ${new Date().toISOString()} starting cleanup of resource: ${name}`);
         
         let timeoutId: NodeJS.Timeout | undefined;
         const timeoutPromise = new Promise<'timeout'>((resolve) => {
@@ -53,7 +53,7 @@ class ShutdownCoordinatorImpl implements ShutdownCoordinator {
             console.warn(`[shutdown] ${new Date().toISOString()} resource '${name}' timed out after ${remaining}ms`);
             hasTimeout = true;
           }
-          console.error(`[coordinator] ${new Date().toISOString()} finished cleanup of resource: ${name}, result: ${result}`);
+          debugLog(`[coordinator] ${new Date().toISOString()} finished cleanup of resource: ${name}, result: ${result}`);
         } catch (err) {
           if (timeoutId) clearTimeout(timeoutId);
           console.error(`[coordinator] ${new Date().toISOString()} resource '${name}' threw error:`, err);
@@ -69,4 +69,10 @@ class ShutdownCoordinatorImpl implements ShutdownCoordinator {
 
 export function createShutdownCoordinator(): ShutdownCoordinator {
   return new ShutdownCoordinatorImpl();
+}
+
+function debugLog(message: string): void {
+  if (process.env.SW_AGENT_DEBUG === '1') {
+    console.error(message);
+  }
 }

@@ -21,6 +21,11 @@ export interface DaemonStatus {
     audit_events_written: number;
     audit_buffer_overflows: number;
   };
+  config?: {
+    databases: number;
+    projects: number;
+    revision: number;
+  };
   last_error?: {
     ts: string;
     code: string;

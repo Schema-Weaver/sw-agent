@@ -228,7 +228,7 @@ export class WakeChannel {
       } else if (targetUrl.startsWith('ws://')) {
         targetUrl = 'http://' + targetUrl.substring(5);
       }
-      targetUrl = targetUrl.replace(/\/+$/, '') + '/agent/wake';
+      targetUrl = targetUrl.replace(/\/+$/, '') + '/api/agent/wake';
 
       let url: URL;
       try {

@@ -1,6 +1,8 @@
 import { MachineConfig } from '../../config/machine-config';
 import { DatabasesConfig } from '../../config/db-config';
 import { isProcessAlive } from '../daemon/pid-file';
+import { Pool, PoolConfig } from 'pg';
+import * as fs from 'fs';
 
 export interface DoctorCheck {
   name: string;
@@ -18,8 +20,8 @@ export interface DoctorContext {
 
 export async function checkSwAgentDirExists(ctx: DoctorContext): Promise<DoctorCheck> {
   try {
-    const fs = await import('fs/promises');
-    const stat = await fs.stat(ctx.swAgentDir);
+    const fs_ = await import('fs/promises');
+    const stat = await fs_.stat(ctx.swAgentDir);
     if (stat.isDirectory()) {
       return { name: 'SW Agent directory exists', status: 'pass' };
     }
@@ -74,18 +76,68 @@ export async function checkDatabasesConfigValid(ctx: DoctorContext): Promise<Doc
   return { name: 'Databases config valid', status: 'pass', detail: `${ctx.databasesConfig.databases.length} database(s) configured` };
 }
 
-export async function checkDatabasesReachable(_ctx: DoctorContext): Promise<DoctorCheck> {
-  return { name: 'Databases reachable', status: 'warn', detail: 'Skipped (requires connection test)' };
+export async function checkDatabasesReachable(ctx: DoctorContext): Promise<DoctorCheck> {
+  if (!ctx.databasesConfig || ctx.databasesConfig.databases.length === 0) {
+    return { name: 'Databases reachable', status: 'warn', detail: 'No databases configured to test' };
+  }
+
+  const results: { alias: string; ok: boolean; detail: string }[] = [];
+  for (const db of ctx.databasesConfig.databases) {
+    try {
+      const password = db.password_stored || (db.password_env ? process.env[db.password_env] : undefined);
+      if (!password) {
+        results.push({ alias: db.db_alias, ok: false, detail: 'No password configured' });
+        continue;
+      }
+
+      const poolConfig: PoolConfig = {
+        host: db.host,
+        port: db.port,
+        database: db.database,
+        user: db.user,
+        password,
+        connectionTimeoutMillis: 5000,
+      };
+      if (db.ssl_mode !== 'disable') {
+        poolConfig.ssl = { rejectUnauthorized: db.ssl_mode === 'verify-ca' || db.ssl_mode === 'verify-full' };
+        if (db.ssl_root_cert) {
+          poolConfig.ssl.ca = fs.readFileSync(db.ssl_root_cert, 'utf8');
+        }
+      }
+
+      const pool = new Pool(poolConfig);
+      try {
+        await Promise.race([
+          pool.query('SELECT 1'),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000)),
+        ]);
+        results.push({ alias: db.db_alias, ok: true, detail: 'Connected' });
+      } catch (err: any) {
+        results.push({ alias: db.db_alias, ok: false, detail: err.message });
+      } finally {
+        await pool.end();
+      }
+    } catch (err: any) {
+      results.push({ alias: db.db_alias, ok: false, detail: err.message });
+    }
+  }
+
+  const allOk = results.every((r) => r.ok);
+  if (allOk) {
+    return { name: 'Databases reachable', status: 'pass', detail: `${results.length} database(s) connected` };
+  }
+  const failed = results.filter((r) => !r.ok);
+  return { name: 'Databases reachable', status: 'fail', detail: `${failed.length} database(s) failed: ${failed.map((f) => f.alias).join(', ')}` };
 }
 
 export async function checkAuditDirWritable(ctx: DoctorContext): Promise<DoctorCheck> {
-  const fs = await import('fs/promises');
+  const fs_ = await import('fs/promises');
   const auditDir = `${ctx.swAgentDir}/audit`;
   const testFile = `${auditDir}/.write_test`;
   try {
-    await fs.mkdir(auditDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(testFile, 'test', { mode: 0o600 });
-    await fs.unlink(testFile);
+    await fs_.mkdir(auditDir, { recursive: true, mode: 0o700 });
+    await fs_.writeFile(testFile, 'test', { mode: 0o600 });
+    await fs_.unlink(testFile);
     return { name: 'Audit directory writable', status: 'pass' };
   } catch (err: unknown) {
     return { name: 'Audit directory writable', status: 'fail', detail: (err as Error).message };
@@ -109,13 +161,13 @@ export async function checkNodeVersion(ctx: DoctorContext): Promise<DoctorCheck>
 }
 
 export async function checkPidFile(ctx: DoctorContext): Promise<DoctorCheck> {
-  const fs = await import('fs/promises');
+  const fs_ = await import('fs/promises');
   const pidPath = `${ctx.swAgentDir}/sw-agent.pid`;
   try {
-    const content = await fs.readFile(pidPath, 'utf8');
+    const content = await fs_.readFile(pidPath, 'utf8');
     const pidInfo = JSON.parse(content);
     if (isProcessAlive(pidInfo.pid)) {
-      return { name: 'PID file', status: 'warn', detail: `Stale PID file (process ${pidInfo.pid} is alive)` };
+      return { name: 'PID file', status: 'pass', detail: `Agent running (pid ${pidInfo.pid})` };
     }
     return { name: 'PID file', status: 'warn', detail: `Stale PID file (process ${pidInfo.pid} is dead)` };
   } catch {

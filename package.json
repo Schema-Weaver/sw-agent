@@ -1,6 +1,6 @@
 {
   "name": "@vivekmind/sw-agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Bridge between the Schema Weaver browser IDE and your PostgreSQL databases. Runs near the DB, never exposes credentials, executes queries and migrations on demand.",
   "license": "MIT",
   "author": "Schema Weaver",
@@ -51,7 +51,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "build": "npm run build:clean && npm run build:cjs && npm run build:esm && npm run build:types",
+    "build": "npm run build:clean && npm run build:cjs && npm run build:esm && npm run build:types && npm run postbuild",
     "build:clean": "rimraf dist",
     "build:cjs": "tsc -p tsconfig.cjs.json",
     "build:esm": "tsc -p tsconfig.esm.json",
@@ -71,9 +71,12 @@
     "test:e2e:docker": "node --test --test-concurrency=1 --import tsx src/tests/e2e/**/*.test.ts",
     "test:all": "npm test && npm run test:e2e",
     "build:dev": "tsc -p tsconfig.dev.json",
+    "postbuild": "node scripts/postbuild.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@inquirer/core": "^11.2.1",
+    "@inquirer/prompts": "^8.5.2",
     "pg": "^8.21.0",
     "ws": "^8.21.0"
   },

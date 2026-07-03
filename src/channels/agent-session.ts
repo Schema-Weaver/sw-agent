@@ -158,7 +158,6 @@ export class AgentSession {
   }
 
   private handleWakeEvent(event: WakeEvent): void {
-    this.currentWakeEvent = event;
     this.processWakeEvent(event).catch(err => {
       console.error('AgentSession: failed processing wake event:', err);
     });
@@ -175,9 +174,11 @@ export class AgentSession {
     }
 
     if (this.dataChannel) {
-      await this.dataChannel.close('explicit_close');
+      this.dataChannel.close('explicit_close').catch(() => {});
       this.dataChannel = undefined;
     }
+
+    this.currentWakeEvent = event;
 
     this.dataChannel = new DataChannel({
       cloudUrl: this.opts.machineConfig.cloud_url,

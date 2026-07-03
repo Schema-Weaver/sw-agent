@@ -70,32 +70,80 @@ npm install @vivekmind/sw-agent
 ```bash
 # 1. Initialize the agent on your machine
 sw-agent init
-# ✓ Created ~/.sw-agent/sw-agent.config.json
-# ✓ Agent ID: agt_laptop_a1b2c3d4
-# ✓ Token: swagt_7Kk2mP9xQr4T...
+#  ✓ Machine label: my-laptop
+#  ✓ Cloud URL: wss://agent.schema-weaver.dev
+#  ✓ Permission: auto_upgrade
+#  ✓ Agent ID: agt_v3_5556c36b
+#  Token shown once — keep it safe to link browser projects.
 
-# 2. Add a PostgreSQL database
+# 2. Add a PostgreSQL database (interactive, with connection test)
 sw-agent db:add
-# > Project name: myapp
-# > Connection string: postgresql://user:pass@localhost:5432/mydb
-# > Permission level: full
+#  ? Project name: myapp
+#  ? Database alias: myapp-db
+#  ? Host: localhost
+#  ? Port: 5432
+#  ? Database name: myapp
+#  ? Username: myapp_user
+#  ? Password storage: Environment variable
+#  ? Environment variable name: DB_PASSWORD
+#  ? SSL mode: require
+#  ✓ Connected. PostgreSQL 16.3
+#  ✓ Database added successfully!
 
-# 3. Verify everything works
+# 3. List your databases
+sw-agent db:ls
+#  ┌────────┬─────────┬──────────────────┬──────────┬─────────┬────────┬─────┬──────────┐
+#  │ ALIAS  │ PROJECT │ HOST             │ DATABASE │ USER    │ SSL    │ PWD │ PERM     │
+#  ├────────┼─────────┼──────────────────┼──────────┼─────────┼────────┼─────┼──────────┤
+#  │ myapp- │ myapp   │ localhost:5432   │ myapp    │ myapp_u │ require│ env │ default  │
+#  │ db     │         │                  │          │ ser     │        │     │          │
+#  └────────┴─────────┴──────────────────┴──────────┴─────────┴────────┴─────┴──────────┘
+
+# 4. Test a connection
+sw-agent db:test myapp-db
+#  ✓ Connected in 12ms
+#    PostgreSQL 16.3
+#    Database: myapp
+#    User: myapp_user
+#    Latency: 12ms
+
+# 5. Verify everything works
 sw-agent doctor
-# ✓ Node.js 18.17.0
-# ✓ Config file OK
-# ✓ Database myapp: connected (12 tables)
+#  ✓ SW Agent directory exists
+#  ✓ Machine config valid         Agent ID: agt_v3_5556c36b
+#  ✓ Token format
+#  ⚠ Databases config valid       No databases configured
+#  ⚠ Databases reachable          No databases configured to test
+#  ✓ Audit directory writable
+#  ✓ Disk space                   Skipped (platform check)
+#  ✓ Node version                 v24.15.0
+#  ✓ PID file                     No PID file (agent not running)
 
-# 4. Start the agent daemon
+# 6. Start the agent daemon
 sw-agent start
-# [agent] Listening for browser connections...
+#  Starting SW Agent
+#    Agent ID: agt_v3_5556c36b
+#    Cloud:    wss://agent.schema-weaver.dev
+#    Databases: 1
 
-# 5. Check status
+# 7. Check status
 sw-agent status
-# Agent: running (PID 12345)
-# Uptime: 2h 34m
-# Projects: myapp
-# Last query: 5 minutes ago
+#  Agent Status
+#    Running          Yes
+#    PID              12345
+#    Version          0.1.1
+#    Started          2025-01-15 10:23:00
+#    Uptime           2h 34m
+#    Last heartbeat   2025-01-15 12:57:00
+#    Status           ✓ OK
+#  Channels
+#    SSE              connected
+#    WSS              idle
+#  Stats
+#    Queries served   42
+#    Streams served   5
+#    Migrations run   3
+#    ...
 ```
 
 ## Quick Start (Programmatic)
@@ -141,17 +189,20 @@ await client.disconnect();
 | Command | Description |
 |---------|-------------|
 | `sw-agent init` | Initialize agent on this machine (generate ID + token) |
-| `sw-agent db:add` | Add a PostgreSQL database (interactive) |
-| `sw-agent db:ls` | List configured databases |
+| `sw-agent db:add` | Add a PostgreSQL database (interactive, with connection test) |
+| `sw-agent db:ls` | List configured databases (pretty table) |
 | `sw-agent db:remove <alias>` | Remove a database entry |
-| `sw-agent db:test <alias>` | Test database connection |
+| `sw-agent db:test <alias>` | Test database connection (with latency) |
+| `sw-agent db:edit <alias>` | Edit a database entry (interactive) |
 | `sw-agent ls:projects` | List all configured projects |
 | `sw-agent start` | Start agent daemon (foreground) |
 | `sw-agent start --daemon` | Start as background daemon |
-| `sw-agent stop` | Stop running agent |
+| `sw-agent stop` | Stop running agent (cleans up PID file) |
+| `sw-agent stop --force` | Force kill (SIGKILL) |
 | `sw-agent status` | Show daemon health and stats |
-| `sw-agent doctor` | Run pre-flight diagnostic checks |
+| `sw-agent doctor` | Run pre-flight diagnostic checks (includes DB reachability) |
 | `sw-agent logs` | View/filter the audit log |
+| `sw-agent logs --follow` | Follow audit log in real-time |
 | `sw-agent audit:verify` | Verify audit log hash chain integrity |
 | `sw-agent link <project>` | Link to a browser project |
 
@@ -193,7 +244,63 @@ sw-agent audit:verify
 
 Each entry includes: timestamp, user, role, action, decision (allow/deny), outcome, SQL fingerprint, and duration.
 
-## Configuration Files
+## Interactive REPL
+
+Running `sw-agent` with no arguments launches an interactive REPL with tab completion:
+
+```bash
+$ sw-agent
+
+  ╔══════════════════════════════════════════════════╗
+  ║                                                  ║
+  ║    Schema Weaver Agent    v0.1.1                ║
+  ║                                                  ║
+  ║    Bridge between your browser IDE and PG.       ║
+  ║                                                  ║
+  ╚══════════════════════════════════════════════════╝
+
+  Agent ID:  agt_v3_5556c36b  ✓ running
+  Config:    ~/.sw-agent
+
+  Type help for commands, exit to quit.
+
+sw-agent › help
+  Commands:
+    init              First-time setup
+    status            Agent status
+    doctor            Diagnostics
+    db add            Add database
+    db ls             List databases
+    db remove         Remove database
+    db test           Test connection
+    db edit           Edit database
+    projects          Linked projects
+    link              Link project
+    start             Start daemon
+    stop              Stop daemon
+    logs              Audit logs
+    audit verify      Verify audit chain
+    config show       Show config
+    help              Show help
+    clear             Clear screen
+    exit              Quit
+
+sw-agent › 
+```
+
+## Modern UI Features
+
+The CLI uses a modern terminal UI inspired by Vite, Claude Code, and Cargo:
+
+- **Green checkmarks (✓)** for success states
+- **Red crosses (✗)** for errors
+- **Yellow warnings (⚠)** for warnings
+- **Animated spinner** for long-running operations (connection tests, audit verification)
+- **Pretty tables** with Unicode box drawing for database lists and status output
+- **Cyan brand accents** for links and commands
+- **Dim gray** for metadata and timestamps
+- **Password masking** with `•` dots in interactive prompts
+- **Tab completion** in the REPL
 
 Files live in `~/.sw-agent/` with `0600` permissions:
 

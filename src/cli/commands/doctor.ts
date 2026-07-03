@@ -2,6 +2,16 @@ import { loadMachineConfig } from '../../config/machine-config';
 import { loadDatabasesConfig } from '../../config/db-config';
 import { getSwAgentDir } from '../../config/paths';
 import { DoctorCheck, runAllChecks, DoctorContext } from '../doctor/checks';
+import { runAllFixes, FixResult } from '../doctor/fixes';
+import { isReplMode } from '../prompt';
+import { C, S } from '../ui';
+
+function exit_(code: number): never {
+  if (isReplMode()) {
+    throw { __exitCode: code };
+  }
+  process.exit(code);
+}
 
 export interface DoctorOptions {
   json?: boolean;
@@ -9,23 +19,20 @@ export interface DoctorOptions {
 
 export async function runDoctor(args: string[], opts: DoctorOptions = {}): Promise<void> {
   const json = opts.json || args.includes('--json') || args.includes('-j');
-  
+  const fix = args.includes('--fix');
+
   const swAgentDir = getSwAgentDir();
   let machineConfig = null;
   let databasesConfig = null;
-  
+
   try {
     machineConfig = loadMachineConfig();
-  } catch {
-    
-  }
-  
+  } catch { /* ignore */ }
+
   try {
     databasesConfig = loadDatabasesConfig();
-  } catch {
-    
-  }
-  
+  } catch { /* ignore */ }
+
   const ctx: DoctorContext = {
     swAgentDir,
     machineConfig,
@@ -33,50 +40,81 @@ export async function runDoctor(args: string[], opts: DoctorOptions = {}): Promi
     nodeVersion: process.version,
     platform: process.platform,
   };
-  
+
+  console.log();
+  console.log(C.bold(C.brand('  SW Agent Diagnostics')));
+  console.log();
+
   const checks = await runAllChecks(ctx);
-  
+
   if (json) {
     console.log(JSON.stringify({ checks }, null, 2));
   } else {
-    printResultsTable(checks);
+    printResults(checks);
   }
-  
-  const hasFail = checks.some(c => c.status === 'fail');
-  process.exit(hasFail ? 1 : 0);
+
+  const hasFail = checks.some((c) => c.status === 'fail');
+  const hasWarn = checks.some((c) => c.status === 'warn');
+
+  console.log();
+  if (hasFail) {
+    console.log(`  ${C.red(S.cross)} ${C.brightRed('Some checks failed. Please fix the issues above.')}`);
+  } else if (hasWarn) {
+    console.log(`  ${C.yellow(S.warning)} ${C.yellow('Some checks passed with warnings.')}`);
+  } else {
+    console.log(`  ${C.green(S.check)} ${C.brightGreen('All checks passed!')}`);
+  }
+  console.log();
+
+  // Self-repair mode: attempt safe fixes for stale files, missing dirs, perms.
+  if (fix) {
+    const fixes = await runAllFixes(ctx);
+    console.log(C.bold(C.brand('  Self-repair')));
+    console.log();
+    if (json) {
+      console.log(JSON.stringify({ checks, fixes }, null, 2));
+    } else {
+      printFixResults(fixes);
+    }
+    const applied = fixes.filter((f) => f.applied).length;
+    console.log();
+    if (applied > 0) {
+      console.log(`  ${C.green(S.check)} Applied ${C.white(String(applied))} fix(es). Re-run ${C.cyan('doctor')} to verify.`);
+    } else {
+      console.log(`  ${C.dim('Nothing to fix — environment is already clean.')}`);
+    }
+    console.log();
+  }
+
+  exit_(hasFail ? 1 : 0);
 }
 
-function printResultsTable(checks: DoctorCheck[]): void {
-  console.log('SW Agent Diagnostic Check\n');
-  
-  const statusIcon = (status: DoctorCheck['status']): string => {
-    switch (status) {
-      case 'pass': return '✓';
-      case 'fail': return '✗';
-      case 'warn': return '⚠';
+function printFixResults(fixes: FixResult[]): void {
+  const maxNameLen = Math.max(...fixes.map((f) => f.name.length));
+  for (const f of fixes) {
+    const name = f.name.padEnd(maxNameLen + 2);
+    const detail = f.detail ? `  ${C.dim(f.detail)}` : '';
+    if (f.applied) {
+      console.log(`  ${C.green(S.check)} ${C.dim(name)}${detail}`);
+    } else {
+      console.log(`  ${C.gray(S.dotSmall)} ${C.dim(name)}${detail}`);
     }
-  };
-  
-  const statusColor = (status: DoctorCheck['status']): string => {
-    switch (status) {
-      case 'pass': return '\x1b[32m';
-      case 'fail': return '\x1b[31m';
-      case 'warn': return '\x1b[33m';
-    }
-  };
-  
-  const reset = '\x1b[0m';
-  
-  for (const check of checks) {
-    const icon = statusIcon(check.status);
-    const color = statusColor(check.status);
-    const detail = check.detail ? ` — ${check.detail}` : '';
-    console.log(`  ${color}${icon}${reset} ${check.name}${detail}`);
   }
-  
-  const passes = checks.filter(c => c.status === 'pass').length;
-  const fails = checks.filter(c => c.status === 'fail').length;
-  const warns = checks.filter(c => c.status === 'warn').length;
-  
-  console.log(`\nSummary: ${passes} pass, ${warns} warn, ${fails} fail`);
+}
+
+function printResults(checks: DoctorCheck[]): void {
+  const maxNameLen = Math.max(...checks.map((c) => c.name.length));
+
+  for (const checkItem of checks) {
+    const name = checkItem.name.padEnd(maxNameLen + 2);
+    const detail = checkItem.detail ? `  ${C.dim(checkItem.detail)}` : '';
+
+    if (checkItem.status === 'pass') {
+      console.log(`  ${C.green(S.check)} ${C.dim(name)}${detail}`);
+    } else if (checkItem.status === 'fail') {
+      console.log(`  ${C.red(S.cross)} ${C.white(name)}${detail}`);
+    } else {
+      console.log(`  ${C.yellow(S.warning)} ${C.white(name)}${detail}`);
+    }
+  }
 }

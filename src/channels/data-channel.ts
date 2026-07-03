@@ -62,7 +62,7 @@ export class DataChannel {
     } else if (targetUrl.startsWith('http://')) {
       targetUrl = 'ws://' + targetUrl.substring(7);
     }
-    targetUrl = targetUrl.replace(/\/+$/, '') + '/agent/data';
+    targetUrl = targetUrl.replace(/\/+$/, '') + '/api/agent/data';
 
     const url = new URL(targetUrl);
     url.searchParams.set('token', this.opts.dataChannelToken);

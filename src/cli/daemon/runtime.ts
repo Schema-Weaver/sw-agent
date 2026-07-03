@@ -2,11 +2,14 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import { MachineConfig } from '../../config/machine-config';
-import { DatabasesConfig } from '../../config/db-config';
+import { DatabasesConfig, loadDatabasesConfig } from '../../config/db-config';
+import { getDbConfigPath } from '../../config/paths';
 import { writePidFile, deletePidFile } from './pid-file';
 import { writeStatusFile, readStatusFile, DaemonStatus } from './status-file';
 import { createShutdownCoordinator } from './shutdown';
 import { installSignalHandlers } from './signal-handlers';
+import { installGlobalHandlers, trackError } from './error-tracker';
+import { initOperationLogger, shutdownOperationLogger as _shutdownOperationLogger } from '../ops/operation-logger';
 import { PoolManager } from '../../execution/pool';
 import { QueryRunner } from '../../execution/query-runner';
 import { MigrationRunner } from '../../execution/migration-runner';
@@ -50,12 +53,16 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
   if (opts.relayUrl) {
     opts.machineConfig.cloud_url = opts.relayUrl;
   }
+  // Capture crashes and per-operation errors to errors.jsonl + cloud.
+  installGlobalHandlers(opts.machineConfig.agent_id);
   const poolManager = new PoolManager();
   let writeStatus: () => Promise<void>;
-  
+  let currentDatabasesConfig = opts.databasesConfig;
+  let configRevision = Date.now();
+
   const planRegistry = new PlanRegistry();
   const autoUpgradeChecker = new AutoUpgradeChecker({ planRegistry });
-  
+
   const auditSink = new AuditSink({
     agentId: opts.machineConfig.agent_id,
     localWriter: new LocalAuditWriter({
@@ -64,9 +71,20 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
       maxArchiveFiles: 10,
     }),
     cloudWriter: new CloudAuditWriter({
-      enabled: false,
-      agent_token: '',
+      enabled: opts.machineConfig.cloud_telemetry?.enabled !== false,
+      url: opts.machineConfig.cloud_telemetry?.ingest_url,
+      cloudUrl: opts.machineConfig.cloud_url,
+      agent_token: opts.machineConfig.agent_token,
+      agent_id: opts.machineConfig.agent_id,
     }),
+  });
+
+  // Also enable the operation logger (CLI/lifecycle ops) for cloud delivery.
+  initOperationLogger({
+    enabled: opts.machineConfig.cloud_telemetry?.enabled !== false,
+    cloudUrl: opts.machineConfig.cloud_url,
+    token: opts.machineConfig.agent_token,
+    agentId: opts.machineConfig.agent_id,
   });
 
   let session: AgentSession;
@@ -79,7 +97,7 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
     timeoutMs: process.env.SW_AGENT_MANUAL_APPROVAL_TIMEOUT_MS ? parseInt(process.env.SW_AGENT_MANUAL_APPROVAL_TIMEOUT_MS, 10) : 60_000,
     auditSink,
   });
-  
+
   const permissionChecker = new PermissionChecker({
     autoUpgradeChecker,
     manualApprovalHandler,
@@ -90,7 +108,7 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
 
   const originalLog = auditSink.log.bind(auditSink);
   const originalLogSync = auditSink.logSync.bind(auditSink);
-  
+
   const updateStatsFromEvent = (partial: any) => {
     stats.audit_events_written++;
     
@@ -130,7 +148,7 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
   const introspector = new Introspector({ poolManager });
   
   const lookupDb = (project: string): DbEntry | null => {
-    const db = opts.databasesConfig.databases.find(d => d.project_name === project);
+    const db = currentDatabasesConfig.databases.find(d => d.project_name === project);
     return db || null;
   };
   
@@ -151,11 +169,17 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
   session = new AgentSession({
     machineConfig: opts.machineConfig,
     onMessage: async (msg) => {
-      await dispatcher.handle(msg);
+      try {
+        await dispatcher.handle(msg);
+      } catch (err) {
+        trackError(err, { op: msg.type });
+        throw err;
+      }
     },
     onStateChange: () => {
       writeStatus().catch(err => {
         console.error('[stateChange] failed to write status:', err);
+        trackError(err, { op: 'writeStatus' });
       });
     }
   });
@@ -173,15 +197,20 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
   shutdown.register('agent-session', async () => {
     await session.stop();
   });
-  
+
   // 4. audit-sink: flush logs
   shutdown.register('audit-sink', async () => {
     await auditSink.flush();
   });
+
+  // 5. operation-logger: flush operation logs
+  shutdown.register('operation-logger', async () => {
+    await _shutdownOperationLogger();
+  });
   let adminServer: http.Server | undefined;
   if (process.env.SW_AGENT_E2E === '1') {
     adminServer = http.createServer(async (req, res) => {
-      console.error(`[admin-server] Received request: ${req.method} ${req.url}`);
+      debugLog(`[admin-server] Received request: ${req.method} ${req.url}`);
       try {
         if (req.method === 'POST' && req.url === '/admin/audit-flush') {
           await auditSink.flush();
@@ -195,7 +224,7 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
         } else if (req.method === 'POST' && req.url && req.url.startsWith('/admin/shutdown')) {
           const parsedUrl = new URL(req.url, 'http://127.0.0.1');
           const timeoutMs = parseInt(parsedUrl.searchParams.get('timeoutMs') || '30000', 10);
-          console.error(`[admin-server] Triggering shutdown with timeoutMs: ${timeoutMs}`);
+          debugLog(`[admin-server] Triggering shutdown with timeoutMs: ${timeoutMs}`);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end('{}');
           void shutdown.shutdown(timeoutMs);
@@ -289,6 +318,11 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
             audit_events_written: stats.audit_events_written,
             audit_buffer_overflows: stats.audit_buffer_overflows,
           },
+          config: {
+            databases: currentDatabasesConfig.databases.length,
+            projects: new Set(currentDatabasesConfig.databases.map((db) => db.project_name)).size,
+            revision: configRevision,
+          },
         };
         hasPendingStatusWrite = false;
         await writeStatusFile({ path: opts.statusFile }, status);
@@ -300,6 +334,42 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
       isWritingStatus = false;
     }
   };
+
+  const dbConfigPath = getDbConfigPath();
+  const reloadDbConfig = async () => {
+    try {
+      const previousAliases = new Set(currentDatabasesConfig.databases.map((db) => db.db_alias));
+      const next = loadDatabasesConfig();
+      const nextAliases = new Set(next.databases.map((db) => db.db_alias));
+
+      currentDatabasesConfig = next;
+      configRevision = Date.now();
+
+      for (const alias of previousAliases) {
+        if (!nextAliases.has(alias)) {
+          await poolManager.closePool(alias, 'explicit');
+        }
+      }
+
+      await writeStatus();
+    } catch (err) {
+      trackError(err, { op: 'reloadDbConfig' });
+      console.error('[config] failed to reload database config:', err);
+    }
+  };
+
+  try {
+    fs.watchFile(dbConfigPath, { interval: 1000 }, (curr, prev) => {
+      if (curr.mtimeMs !== prev.mtimeMs || curr.size !== prev.size) {
+        void reloadDbConfig();
+      }
+    });
+    shutdown.register('db-config-watcher', async () => {
+      fs.unwatchFile(dbConfigPath);
+    });
+  } catch (err) {
+    trackError(err, { op: 'watchDbConfig' });
+  }
   
   await session.start();
   
@@ -312,7 +382,7 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
   let autoExitTimer: ReturnType<typeof setTimeout> | undefined;
   if (opts.autoExitMs) {
     autoExitTimer = setTimeout(() => {
-      console.error('[daemon] Auto exit triggered');
+      debugLog('[daemon] Auto exit triggered');
       shutdown.shutdown(5_000).catch(() => {});
     }, opts.autoExitMs);
   }
@@ -321,26 +391,26 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
     const checkShutdown = setInterval(() => {
       if (shutdown.isShuttingDown()) {
         clearInterval(checkShutdown);
-        console.error(`[daemon] ${new Date().toISOString()} Shutdown detected, proceeding to cleanup...`);
+        debugLog(`[daemon] ${new Date().toISOString()} Shutdown detected, proceeding to cleanup...`);
         resolve();
       }
     }, 100);
   });
   
-  console.error(`[daemon] ${new Date().toISOString()} Awaiting shutdown coordinator...`);
+  debugLog(`[daemon] ${new Date().toISOString()} Awaiting shutdown coordinator...`);
   const result = await shutdown.shutdown(30_000);
-  console.error(`[daemon] ${new Date().toISOString()} Shutdown coordinator finished with result:`, result);
+  debugLog(`[daemon] ${new Date().toISOString()} Shutdown coordinator finished with result: ${result}`);
   
   clearInterval(heartbeat);
   if (autoExitTimer) clearTimeout(autoExitTimer);
   
-  console.error(`[daemon] ${new Date().toISOString()} Deleting pid file...`);
+  debugLog(`[daemon] ${new Date().toISOString()} Deleting pid file...`);
   await deletePidFile({ path: opts.pidFile });
-  
-  console.error(`[daemon] ${new Date().toISOString()} Uninstalling signals...`);
+
+  debugLog(`[daemon] ${new Date().toISOString()} Uninstalling signals...`);
   uninstallSignals();
-  
-  console.error(`[daemon] ${new Date().toISOString()} Writing final status...`);
+
+  debugLog(`[daemon] ${new Date().toISOString()} Writing final status...`);
   await writeStatusFile({ path: opts.statusFile }, {
     pid: process.pid,
     started_at: daemonStartedAt,
@@ -359,8 +429,19 @@ export async function runAgent(opts: RuntimeOptions): Promise<number> {
       audit_events_written: stats.audit_events_written,
       audit_buffer_overflows: stats.audit_buffer_overflows,
     },
+    config: {
+      databases: currentDatabasesConfig.databases.length,
+      projects: new Set(currentDatabasesConfig.databases.map((db) => db.project_name)).size,
+      revision: configRevision,
+    },
   });
   
-  console.error('[daemon] runAgent returning exit code:', result === 'clean' ? 0 : 1);
+  debugLog(`[daemon] runAgent returning exit code: ${result === 'clean' ? 0 : 1}`);
   return result === 'clean' ? 0 : 1;
+}
+
+function debugLog(message: string): void {
+  if (process.env.SW_AGENT_DEBUG === '1') {
+    console.error(message);
+  }
 }

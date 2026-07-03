@@ -65,13 +65,13 @@ export class Canceller {
     }
 
     if (!client) {
-      const passwordFromEnv = process.env[dbEntry.password_env] || '';
+      const password = dbEntry.password_stored || (dbEntry.password_env ? process.env[dbEntry.password_env] : '') || '';
       const c = new Client({
         host: dbEntry.host,
         port: dbEntry.port,
         database: dbEntry.database,
         user: dbEntry.user,
-        password: passwordFromEnv,
+        password: password,
       });
       await c.connect();
       client = c;

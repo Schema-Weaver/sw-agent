@@ -1,91 +1,172 @@
 import * as readline from 'readline';
+import { select } from '@inquirer/prompts';
+import { C } from './ui/colors';
 
 let rl: readline.Interface | null = null;
 
-function getInterface(): readline.Interface {
-  if (!rl) {
-    rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    rl.on('SIGINT', () => {
-      console.log('\nCancelled.');
-      if (rl) {
-        rl.close();
-      }
-      process.exit(0);
-    });
-  }
+export function setReplInterface(interface_: readline.Interface | null): void {
+  rl = interface_;
+}
+
+let replMode = false;
+
+export function setReplMode(mode: boolean): void {
+  replMode = mode;
+}
+
+export function isReplMode(): boolean {
+  return replMode;
+}
+
+export function getReplInterface(): readline.Interface | null {
   return rl;
 }
 
-/**
- * Shows "Question [default]: " and returns user input or default. Trims whitespace.
- */
 export function ask(question: string, defaultValue?: string): Promise<string> {
   return new Promise((resolve) => {
-    const promptInterface = getInterface();
-    const displayDefault = defaultValue !== undefined ? ` [${defaultValue}]` : '';
-    promptInterface.question(`${question}${displayDefault}: `, (answer) => {
-      const trimmed = answer.trim();
-      if (trimmed === '' && defaultValue !== undefined) {
-        resolve(defaultValue);
-      } else {
-        resolve(trimmed);
-      }
-    });
+    const displayDefault = defaultValue !== undefined ? C.dim(` [${defaultValue}]`) : '';
+    const promptText = `${C.brand('?')} ${C.white(question)}${displayDefault} `;
+
+    if (rl) {
+      rl.pause();
+      const tempRl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        terminal: true,
+      });
+
+      tempRl.question(promptText, (answer) => {
+        try {
+          tempRl.close();
+        } catch {
+          // ignore
+        }
+        rl?.resume();
+        const trimmed = answer.trim();
+        if (trimmed === '' && defaultValue !== undefined) {
+          resolve(defaultValue);
+        } else {
+          resolve(trimmed);
+        }
+      });
+    } else {
+      const promptInterface = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+
+      promptInterface.question(promptText, (answer) => {
+        promptInterface.close();
+        const trimmed = answer.trim();
+        if (trimmed === '' && defaultValue !== undefined) {
+          resolve(defaultValue);
+        } else {
+          resolve(trimmed);
+        }
+      });
+    }
   });
 }
 
-/**
- * Shows "Question: " and reads input. Warnings about password masking if TTY.
- */
 export function askSecret(question: string): Promise<string> {
-  if (process.stdin.isTTY) {
-    console.warn('⚠️  Warning: Password masking is not supported yet. Your input will be visible.');
-  }
   return new Promise((resolve) => {
-    const promptInterface = getInterface();
-    promptInterface.question(`${question}: `, (answer) => {
-      resolve(answer.trim());
-    });
+    const promptText = `${C.brand('?')} ${C.white(question)} `;
+
+    if (rl) {
+      rl.pause();
+    }
+
+    const stdout = process.stdout;
+    const stdin = process.stdin;
+    let password = '';
+
+    stdout.write(promptText);
+
+    if (stdin.isTTY) {
+      stdin.setRawMode(true);
+    }
+    stdin.resume();
+
+    const onData = (chunk: Buffer) => {
+      const str = chunk.toString('utf8');
+      for (const ch of str) {
+        const code = ch.charCodeAt(0);
+        if (code === 3) {
+          // Ctrl+C
+          cleanup();
+          process.exit(130);
+        }
+        if (code === 13 || code === 10) {
+          // Enter
+          cleanup();
+          stdout.write('\n');
+          resolve(password.trim());
+          return;
+        }
+        if (code === 127 || code === 8) {
+          // Backspace
+          if (password.length > 0) {
+            password = password.slice(0, -1);
+            if (stdout.isTTY) {
+              stdout.write('\b \b');
+            }
+          }
+          continue;
+        }
+        if (code === 27) {
+          // Escape sequences (arrow keys, etc.) - ignore
+          continue;
+        }
+        if (code < 32) {
+          // Control characters - ignore
+          continue;
+        }
+        password += ch;
+        if (stdout.isTTY) {
+          stdout.write(C.dim('*'));
+        }
+      }
+    };
+
+    const cleanup = () => {
+      stdin.removeListener('data', onData);
+      if (stdin.isTTY) {
+        try {
+          stdin.setRawMode(false);
+        } catch {
+          // ignore
+        }
+      }
+      rl?.resume();
+    };
+
+    stdin.on('data', onData);
   });
 }
 
-/**
- * Shows numbered choices. Users can type either index number or exact value.
- */
 export async function askChoice(
   question: string,
   choices: string[],
   defaultValue?: string,
 ): Promise<string> {
-  console.log(`\nAvailable choices for ${question}:`);
-  choices.forEach((choice, index) => {
-    console.log(`  ${index + 1}. ${choice}`);
-  });
+  if (rl) {
+    rl.pause();
+  }
 
-  for (;;) {
-    const ans = await ask(`Select choice (1-${choices.length})`, defaultValue);
-    const idx = parseInt(ans, 10);
-    if (!isNaN(idx) && idx >= 1 && idx <= choices.length) {
-      return choices[idx - 1];
-    }
-    const match = choices.find((c) => c.toLowerCase() === ans.toLowerCase());
-    if (match) {
-      return match;
-    }
-    console.log(
-      `Invalid selection. Please enter a number between 1 and ${choices.length} or type the choice exactly.`,
-    );
+  try {
+    const result = await select({
+      message: question,
+      choices: choices.map((c) => ({ name: c, value: c })),
+      default: defaultValue,
+    });
+    return result;
+  } finally {
+    rl?.resume();
   }
 }
 
-/**
- * Shows "Question (Y/n): " or "Question (y/N): " based on default and returns boolean.
- */
 export async function askConfirm(question: string, defaultValue: boolean): Promise<boolean> {
-  const displaySuffix = defaultValue ? ' (Y/n)' : ' (y/N)';
+  const displaySuffix = defaultValue ? C.dim(' (Y/n)') : C.dim(' (y/N)');
   for (;;) {
     const ans = await ask(`${question}${displaySuffix}`);
     if (ans === '') {
@@ -98,16 +179,10 @@ export async function askConfirm(question: string, defaultValue: boolean): Promi
     if (lower === 'n' || lower === 'no') {
       return false;
     }
-    console.log('Please enter "y" or "n".');
+    console.log(C.yellow('  Please enter "y" or "n".'));
   }
 }
 
-/**
- * Closes the readline interface.
- */
 export function closePrompts(): void {
-  if (rl) {
-    rl.close();
-    rl = null;
-  }
+  // No-op - readline interfaces are managed per-call
 }

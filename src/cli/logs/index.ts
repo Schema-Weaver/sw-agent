@@ -1,1 +1,1 @@
-export { formatEventRow, formatEventJson, formatTableHeader } from './format';
+export { formatEventRow, formatEventJson, formatTableHeader, renderLogTable } from './format';
