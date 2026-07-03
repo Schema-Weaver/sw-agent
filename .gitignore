@@ -32,3 +32,8 @@ delete-tables.ts
 
 # Prompt files (kept locally, not pushed to GitHub)
 sw-agent-part*.md
+
+# Analysis and Architecture documents
+ARCHITECTURE.md
+security-analysis.md
+sw-agent-current-flow-analysis.md
